@@ -1,12 +1,2 @@
 package com.example.cosmicshooterioy
-
-/**
- * Класс Player — модель космического корабля.
- * Хранит позицию (x, y) и размер (width, height).
- */
-data class Player(
-    var x: Float,       // Позиция по горизонтали (центр корабля)
-    var y: Float,       // Позиция по вертикали (центр корабля)
-    val width: Float,   // Ширина корабля
-    val height: Float   // Высота корабля
-)
+data class Player(var x: Float, var y: Float, val width: Float, val height: Float)

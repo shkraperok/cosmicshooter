@@ -8,17 +8,23 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import kotlin.random.Random
 
+// Класс для звезд (параллакс фон)
+data class Star(var x: Float, var y: Float, var size: Float, var speed: Float)
+
 class GameView(context: Context, attrs: AttributeSet?) : SurfaceView(context, attrs), Runnable {
 
     // Объекты
     private val player = Player(x = 0f, y = 0f, width = 80f, height = 100f)
     private val enemies = mutableListOf<Enemy>()
     private val bullets = mutableListOf<Bullet>()
+    private val stars = mutableListOf<Star>()
 
-    // Параметры игры (динамические)
+    // Параметры игры
     private var score = 0
     private var lives = 3
+    private var maxLives = 3
     private var gameOver = false
+    private var isPaused = false
     private var enemySpawnCounter = 0
 
     // Настраиваемые параметры
@@ -26,10 +32,22 @@ class GameView(context: Context, attrs: AttributeSet?) : SurfaceView(context, at
     private var BULLET_SPEED = 20f
     private var PLAYER_SPEED = 20f
     private var ACCURACY_RADIUS = 10f
+    private var SHOOT_DELAY = 300L // Задержка авто-стрельбы (ms)
 
     // Статистика
     private var totalEnemiesSpawned = 0
     private var totalEnemiesKilled = 0
+
+    // Авто-стрельба
+    private var lastShotTime = 0L
+
+    // Кнопка паузы
+    private val pauseButtonRect = RectF(0f, 0f, 100f, 100f)
+    private val pauseButtonPaint = Paint().apply {
+        color = Color.WHITE
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
 
     // Кисти
     private val playerPaint = Paint().apply { color = Color.BLUE; style = Paint.Style.FILL; isAntiAlias = true }
@@ -37,6 +55,9 @@ class GameView(context: Context, attrs: AttributeSet?) : SurfaceView(context, at
     private val bulletPaint = Paint().apply { color = Color.YELLOW; style = Paint.Style.FILL; isAntiAlias = true }
     private val textPaint = Paint().apply { color = Color.WHITE; textSize = 50f; isAntiAlias = true; typeface = Typeface.DEFAULT_BOLD }
     private val gameOverPaint = Paint().apply { color = Color.RED; textSize = 80f; isAntiAlias = true; typeface = Typeface.DEFAULT_BOLD }
+    private val healthBarBgPaint = Paint().apply { color = Color.DKGRAY; style = Paint.Style.FILL }
+    private val healthBarPaint = Paint().apply { color = Color.GREEN; style = Paint.Style.FILL }
+    private val starPaint = Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
 
     // Управление
     private var pointerId = -1
@@ -63,12 +84,19 @@ class GameView(context: Context, attrs: AttributeSet?) : SurfaceView(context, at
 
         // Применение улучшений
         BULLET_SPEED = 20f + (fireRateLvl * 5f)
-        lives = 3 + shieldLvl
+        maxLives = 3 + shieldLvl
+        lives = maxLives
         ACCURACY_RADIUS = 10f + (accuracyLvl * 5f)
+        SHOOT_DELAY = 300L - (fireRateLvl * 30L)
+        if (SHOOT_DELAY < 100L) SHOOT_DELAY = 100L
+
+        // Инициализация звезд
+        initStars()
 
         post {
             player.x = width / 2f
             player.y = height - 200f
+            pauseButtonRect.set(width - 120f, 20f, width - 20f, 120f)
         }
 
         holder.addCallback(object : SurfaceHolder.Callback {
@@ -76,6 +104,19 @@ class GameView(context: Context, attrs: AttributeSet?) : SurfaceView(context, at
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {}
             override fun surfaceDestroyed(holder: SurfaceHolder) { stopGame() }
         })
+    }
+
+    // Инициализация звездного фона
+    private fun initStars() {
+        stars.clear()
+        for (i in 0..100) {
+            stars.add(Star(
+                x = Random.nextFloat() * 1000,
+                y = Random.nextFloat() * 2000,
+                size = Random.nextFloat() * 3 + 1,
+                speed = Random.nextFloat() * 3 + 1
+            ))
+        }
     }
 
     private fun startGame() {
@@ -89,8 +130,10 @@ class GameView(context: Context, attrs: AttributeSet?) : SurfaceView(context, at
     private fun resetGame() {
         score = 0
         val prefs = context.getSharedPreferences("GamePrefs", Context.MODE_PRIVATE)
-        lives = 3 + prefs.getInt("upgrade_shield", 0)
+        maxLives = 3 + prefs.getInt("upgrade_shield", 0)
+        lives = maxLives
         gameOver = false
+        isPaused = false
         enemySpawnCounter = 0
         totalEnemiesSpawned = 0
         totalEnemiesKilled = 0
@@ -98,6 +141,8 @@ class GameView(context: Context, attrs: AttributeSet?) : SurfaceView(context, at
         bullets.clear()
         player.x = width / 2f
         player.y = height - 200f
+        pauseButtonRect.set(width - 120f, 20f, width - 20f, 120f)
+        lastShotTime = System.currentTimeMillis()
     }
 
     private fun stopGame() {
@@ -109,7 +154,9 @@ class GameView(context: Context, attrs: AttributeSet?) : SurfaceView(context, at
 
     override fun run() {
         while (isRunning) {
-            update()
+            if (!isPaused) {
+                update()
+            }
             draw()
             try { Thread.sleep(16) } catch (e: InterruptedException) { e.printStackTrace() }
         }
@@ -117,6 +164,22 @@ class GameView(context: Context, attrs: AttributeSet?) : SurfaceView(context, at
 
     private fun update() {
         if (gameOver) return
+
+        // АВТО-СТРЕЛЬБА
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastShotTime > SHOOT_DELAY) {
+            shoot()
+            lastShotTime = currentTime
+        }
+
+        // Движение звезд (параллакс)
+        for (star in stars) {
+            star.y += star.speed
+            if (star.y > height) {
+                star.y = 0f
+                star.x = Random.nextFloat() * width
+            }
+        }
 
         // Движение игрока
         if (isTouching) {
@@ -173,6 +236,11 @@ class GameView(context: Context, attrs: AttributeSet?) : SurfaceView(context, at
         val canvas = holder.lockCanvas() ?: return
         canvas.drawColor(Color.BLACK)
 
+        // Рисуем звезды (фон)
+        for (star in stars) {
+            canvas.drawCircle(star.x, star.y, star.size, starPaint)
+        }
+
         // Игрок
         val hw = player.width / 2f; val hh = player.height / 2f
         canvas.drawRoundRect(player.x - hw, player.y - hh, player.x + hw, player.y + hh, 20f, 20f, playerPaint)
@@ -182,15 +250,62 @@ class GameView(context: Context, attrs: AttributeSet?) : SurfaceView(context, at
         enemies.forEach { canvas.drawCircle(it.x, it.y, it.size / 2, enemyPaint) }
         bullets.forEach { canvas.drawCircle(it.x, it.y, 10f, bulletPaint) }
 
-        // UI
+        // Кнопка паузы
+        canvas.drawRoundRect(pauseButtonRect, 10f, 10f, pauseButtonPaint)
+        val pauseTextPaint = Paint().apply {
+            color = Color.BLACK
+            textSize = 40f
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        canvas.drawText("||", pauseButtonRect.centerX(), pauseButtonRect.centerY() + 15f, pauseTextPaint)
+
+        // UI - Счет
         canvas.drawText("Счёт: $score", 30f, 80f, textPaint)
-        canvas.drawText("Жизни: $lives", 30f, 140f, textPaint)
+
+        // UI - Шкала здоровья
+        val healthBarWidth = 300f
+        val healthBarHeight = 30f
+        val healthBarX = 30f
+        val healthBarY = 110f
+
+        canvas.drawRoundRect(healthBarX, healthBarY, healthBarX + healthBarWidth, healthBarY + healthBarHeight, 10f, 10f, healthBarBgPaint)
+
+        val healthPercent = lives.toFloat() / maxLives
+        val healthFillWidth = healthBarWidth * healthPercent
+        val healthColor = when {
+            healthPercent > 0.6f -> Color.GREEN
+            healthPercent > 0.3f -> Color.YELLOW
+            else -> Color.RED
+        }
+        healthBarPaint.color = healthColor
+        canvas.drawRoundRect(healthBarX, healthBarY, healthBarX + healthFillWidth, healthBarY + healthBarHeight, 10f, 10f, healthBarPaint)
+
+        canvas.drawText("$lives / $maxLives", healthBarX + healthBarWidth + 20f, healthBarY + 22f, textPaint)
+
+        // UI - Точность
         val acc = if (totalEnemiesSpawned > 0) (totalEnemiesKilled.toFloat() / totalEnemiesSpawned * 100).toInt() else 100
         canvas.drawText("Точность: $acc%", 30f, 200f, textPaint)
 
+        // Экран паузы
+        if (isPaused && !gameOver) {
+            canvas.drawColor(Color.argb(128, 0, 0, 0))
+            val pausePaint = Paint().apply {
+                color = Color.WHITE
+                textSize = 100f
+                textAlign = Paint.Align.CENTER
+                typeface = Typeface.DEFAULT_BOLD
+            }
+            canvas.drawText("PAUSED", width / 2f, height / 2f, pausePaint)
+            canvas.drawText("Нажмите для продолжения", width / 2f, height / 2f + 100f, textPaint)
+        }
+
+        // Game Over
         if (gameOver) {
+            canvas.drawColor(Color.argb(128, 0, 0, 0))
             canvas.drawText("GAME OVER", width / 2f - 220f, height / 2f, gameOverPaint)
-            canvas.drawText("Нажмите для рестарта", width / 2f - 280f, height / 2f + 100f, textPaint)
+            canvas.drawText("Счёт: $score", width / 2f - 100f, height / 2f + 80f, textPaint)
+            canvas.drawText("Нажмите для рестарта", width / 2f - 280f, height / 2f + 160f, textPaint)
         }
 
         holder.unlockCanvasAndPost(canvas)
@@ -209,7 +324,11 @@ class GameView(context: Context, attrs: AttributeSet?) : SurfaceView(context, at
         enemies.add(Enemy(x, -50f, size, speed))
     }
 
-    private fun shoot() { if (!gameOver) bullets.add(Bullet(player.x, player.y)) }
+    private fun shoot() {
+        if (!gameOver && !isPaused) {
+            bullets.add(Bullet(player.x, player.y - player.height / 2f))
+        }
+    }
 
     private fun saveProgress() {
         val prefs = context.getSharedPreferences("GamePrefs", Context.MODE_PRIVATE)
@@ -222,22 +341,42 @@ class GameView(context: Context, attrs: AttributeSet?) : SurfaceView(context, at
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val action = event.actionMasked
         val index = event.actionIndex
+        val x = event.getX(index)
+        val y = event.getY(index)
+
         when (action) {
             MotionEvent.ACTION_DOWN -> {
-                if (gameOver) resetGame()
-                pointerId = event.getPointerId(index)
-                touchX = event.getX(index); touchY = event.getY(index); isTouching = true
+                // Проверка нажатия на кнопку паузы
+                if (pauseButtonRect.contains(x, y) && !gameOver) {
+                    isPaused = !isPaused
+                    return true
+                }
+
+                if (gameOver) {
+                    resetGame()
+                } else if (isPaused) {
+                    isPaused = false
+                } else {
+                    pointerId = event.getPointerId(index)
+                    touchX = x
+                    touchY = y
+                    isTouching = true
+                }
             }
-            MotionEvent.ACTION_POINTER_DOWN -> if (!gameOver) shoot()
             MotionEvent.ACTION_MOVE -> {
-                if (!gameOver) for (i in 0 until event.pointerCount) {
-                    if (event.getPointerId(i) == pointerId) {
-                        touchX = event.getX(i); touchY = event.getY(i)
+                if (!gameOver && !isPaused) {
+                    for (i in 0 until event.pointerCount) {
+                        if (event.getPointerId(i) == pointerId) {
+                            touchX = event.getX(i)
+                            touchY = event.getY(i)
+                        }
                     }
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
-                if (event.getPointerId(index) == pointerId) isTouching = false
+                if (event.getPointerId(index) == pointerId) {
+                    isTouching = false
+                }
             }
         }
         return true
